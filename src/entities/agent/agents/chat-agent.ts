@@ -1,133 +1,165 @@
 import type { ModelMessage } from "ai";
 import * as Effect from "effect/Effect";
-import * as Sentry from "@sentry/nextjs";
 
-// Types for our agent
+// Types
+interface TextPart {
+	type: "text";
+	text: string;
+}
+
+type Intent = "help_request" | "order_inquiry" | "general_chat";
+
 export interface AgentResult {
 	systemPrompt: string;
 	enhancedMessages: ModelMessage[];
-	parameters: {
-		temperature: number;
+	parameters: { temperature: number };
+	intent: Intent;
+	metadata: {
+		contextUsed: boolean;
+		processingTimeMs: number;
 	};
-	intent: string; // добавляем интент в результат
 }
 
-// Simple intent analysis with basic logging
-const analyzeUserIntent = (content: string) =>
-	Effect.gen(function* (_) {
-		// Simple intent analysis logic
-		if (content.includes("help") || content.includes("помощь"))
-			return "help_request";
-		if (content.includes("order") || content.includes("заказ"))
-			return "order_inquiry";
-		return "general_chat";
-	});
+// Constants
+const DEFAULT_PROMPT = "You are a helpful assistant." as const;
+const DEFAULT_PARAMS = { temperature: 0.7 } as const;
 
-// Define system prompts as constants
-const SYSTEM_PROMPTS = {
-	help_request:
-		"You are a technical support assistant. Answer concisely and specifically.",
-	order_inquiry: "You are an order assistant. Help with order information.",
-	general_chat: "You are a friendly assistant. Communicate casually.",
-} as const;
-
-// Response strategies based on intent
-const selectResponseStrategy = (intent: string) => {
-	const strategies = {
-		help_request: {
-			systemPrompt: SYSTEM_PROMPTS.help_request,
-			parameters: { temperature: 0.3 },
-		},
-		order_inquiry: {
-			systemPrompt: SYSTEM_PROMPTS.order_inquiry,
-			parameters: { temperature: 0.5 },
-		},
-		general_chat: {
-			systemPrompt: SYSTEM_PROMPTS.general_chat,
-			parameters: { temperature: 0.8 },
-		},
-	} as const;
-
-	return (
-		strategies[intent as keyof typeof strategies] || strategies.general_chat
-	);
+const STRATEGIES: Record<
+	Intent,
+	{ systemPrompt: string; parameters: { temperature: number } }
+> = {
+	help_request: {
+		systemPrompt:
+			"You are a technical support assistant. Answer concisely and specifically.",
+		parameters: { temperature: 0.3 },
+	},
+	order_inquiry: {
+		systemPrompt: "You are an order assistant. Help with order information.",
+		parameters: { temperature: 0.5 },
+	},
+	general_chat: {
+		systemPrompt: "You are a friendly assistant. Communicate casually.",
+		parameters: { temperature: 0.8 },
+	},
 };
 
-// Get relevant context based on intent
-const getRelevantContext = (_messages: ModelMessage[], intent: string) =>
-	Effect.gen(function* (_) {
-		// This could be replaced with actual database/API calls
-		if (intent === "order_inquiry") {
-			return "Context: The user has active orders #12345, #67890";
-		}
-		return "";
-	});
+// Utils
+const isEmptyInput = (messages: ModelMessage[]) =>
+	messages.length === 0 || !messages[messages.length - 1]?.content;
 
-// Helper function to extract text from ModelMessage content
 const extractTextFromContent = (content: unknown): string => {
-	if (typeof content === "string") {
-		return content;
-	}
-
+	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
-		return content
-			.filter(
-				(part) => part && typeof part === "object" && part.type === "text",
-			)
-			.map((part) => part.text)
-			.filter(Boolean)
-			.join(" ");
+		return (content as TextPart[]).reduce(
+			(acc, part) =>
+				part && part.type === "text" && part.text
+					? acc
+						? `${acc} ${part.text}`
+						: part.text
+					: acc,
+			"",
+		);
 	}
-
 	return "";
 };
 
-// Default agent result for fallback scenarios
-const getDefaultAgentResult = (messages: ModelMessage[]): AgentResult => ({
-	systemPrompt: "You are a helpful assistant.",
-	enhancedMessages: messages,
-	parameters: { temperature: 0.7 },
-	intent: "general_chat",
-});
+// Intent analysis with tracing
+const analyzeUserIntent = (content: string) =>
+	Effect.sync(() => {
+		const c = content.toLowerCase();
+		if (c.includes("help") || c.includes("помощь"))
+			return "help_request" as Intent;
+		if (c.includes("order") || c.includes("заказ"))
+			return "order_inquiry" as Intent;
+		return "general_chat" as Intent;
+	}).pipe(
+		Effect.withSpan("agent.analyze-intent", {
+			attributes: {
+				"agent.operation": "intent_analysis",
+				"agent.content_length": content.length,
+				"agent.content_preview": content.substring(0, 100),
+			},
+		}),
+	);
 
-// Main agent logic
+// Strategy selection with tracing
+const selectResponseStrategy = (intent: Intent) =>
+	Effect.sync(() => STRATEGIES[intent]).pipe(
+		Effect.withSpan("agent.select-strategy", {
+			attributes: {
+				"agent.operation": "strategy_selection",
+				"agent.intent": intent,
+			},
+		}),
+	);
+
+// Context retrieval placeholder without emulation, with tracing
+const getRelevantContext = (messages: ModelMessage[], intent: Intent) =>
+	Effect.sync(() => {
+		// Replace with real data source (DB/vector store/API)
+		if (intent === "order_inquiry") {
+			return {
+				context: "Context: The user has active orders #12345, #67890",
+				used: true,
+			};
+		}
+		return { context: "", used: false };
+	}).pipe(
+		Effect.withSpan("agent.get-context", {
+			attributes: {
+				"agent.operation": "context_retrieval",
+				"agent.intent": intent,
+				"agent.messages_count": messages.length,
+			},
+		}),
+	);
+
+// Main effect with tracing
 export const chatAgentEffect = (messages: ModelMessage[]) =>
 	Effect.gen(function* (_) {
-		// Check if we have messages
-		if (messages.length === 0) {
-			return getDefaultAgentResult(messages);
+		const startTime = Date.now();
+
+		if (isEmptyInput(messages)) {
+			return {
+				systemPrompt: DEFAULT_PROMPT,
+				enhancedMessages: messages,
+				parameters: { ...DEFAULT_PARAMS },
+				intent: "general_chat",
+				metadata: {
+					contextUsed: false,
+					processingTimeMs: Date.now() - startTime,
+				},
+			} satisfies AgentResult;
 		}
 
-		const lastMessage = messages[messages.length - 1];
+		const lastMessageContent = messages[messages.length - 1]?.content ?? "";
+		const textContent = extractTextFromContent(lastMessageContent);
 
-		// Check if lastMessage exists and has content
-		if (!lastMessage || !lastMessage.content) {
-			return getDefaultAgentResult(messages);
-		}
-
-		// Extract text content from the message
-		const textContent = extractTextFromContent(lastMessage.content);
-
-		// Agent logic: analyze user intent
 		const intent = yield* _(analyzeUserIntent(textContent));
+		const strategy = yield* _(selectResponseStrategy(intent));
+		const contextData = yield* _(getRelevantContext(messages, intent));
 
-		// Select response strategy based on intent
-		const strategy = selectResponseStrategy(intent);
-
-		// Get additional context
-		const context = yield* _(getRelevantContext(messages, intent));
-
-		// Enhance messages with context
-		const enhancedMessages = context
-			? [...messages, { role: "system" as const, content: context }]
+		const enhancedMessages = contextData.used
+			? [...messages, { role: "system" as const, content: contextData.context }]
 			: messages;
 
 		return {
 			systemPrompt: strategy.systemPrompt,
-			enhancedMessages: enhancedMessages,
+			enhancedMessages,
 			parameters: strategy.parameters,
-			intent: intent,
+			intent,
+			metadata: {
+				contextUsed: contextData.used,
+				processingTimeMs: Date.now() - startTime,
+			},
 		} as AgentResult;
 	}).pipe(
-		Effect.catchAll(() => Effect.succeed(getDefaultAgentResult(messages)))
+		Effect.withSpan("agent.chat-processing", {
+			attributes: {
+				"agent.operation": "full_processing",
+				"agent.input_messages_count": messages.length,
+				"agent.last_message_role":
+					messages[messages.length - 1]?.role ?? "unknown",
+			},
+		}),
 	);
