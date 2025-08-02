@@ -1,6 +1,6 @@
 import type { ModelMessage } from "ai";
-import * as Console from "effect/Console";
 import * as Effect from "effect/Effect";
+import * as Sentry from "@sentry/nextjs";
 
 // Types for our agent
 export interface AgentResult {
@@ -9,29 +9,19 @@ export interface AgentResult {
 	parameters: {
 		temperature: number;
 	};
+	intent: string; // добавляем интент в результат
 }
 
-// Simple intent analysis with logging
+// Simple intent analysis with basic logging
 const analyzeUserIntent = (content: string) =>
 	Effect.gen(function* (_) {
-		yield* _(
-			Console.log(`Analyzing intent for: ${content.substring(0, 50)}...`),
-		);
-
 		// Simple intent analysis logic
 		if (content.includes("help") || content.includes("помощь"))
 			return "help_request";
 		if (content.includes("order") || content.includes("заказ"))
 			return "order_inquiry";
 		return "general_chat";
-	}).pipe(
-		Effect.catchAll((error) =>
-			Effect.gen(function* (_) {
-				yield* _(Console.error("Intent analysis failed:", error));
-				return "general_chat";
-			}),
-		),
-	);
+	});
 
 // Define system prompts as constants
 const SYSTEM_PROMPTS = {
@@ -66,21 +56,12 @@ const selectResponseStrategy = (intent: string) => {
 // Get relevant context based on intent
 const getRelevantContext = (_messages: ModelMessage[], intent: string) =>
 	Effect.gen(function* (_) {
-		yield* _(Console.log(`Getting context for intent: ${intent}`));
-
 		// This could be replaced with actual database/API calls
 		if (intent === "order_inquiry") {
 			return "Context: The user has active orders #12345, #67890";
 		}
 		return "";
-	}).pipe(
-		Effect.catchAll((error) =>
-			Effect.gen(function* (_) {
-				yield* _(Console.error("Context retrieval failed:", error));
-				return "";
-			}),
-		),
-	);
+	});
 
 // Helper function to extract text from ModelMessage content
 const extractTextFromContent = (content: unknown): string => {
@@ -106,6 +87,7 @@ const getDefaultAgentResult = (messages: ModelMessage[]): AgentResult => ({
 	systemPrompt: "You are a helpful assistant.",
 	enhancedMessages: messages,
 	parameters: { temperature: 0.7 },
+	intent: "general_chat",
 });
 
 // Main agent logic
@@ -113,9 +95,6 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 	Effect.gen(function* (_) {
 		// Check if we have messages
 		if (messages.length === 0) {
-			yield* _(
-				Console.log("No messages provided, using default configuration"),
-			);
 			return getDefaultAgentResult(messages);
 		}
 
@@ -123,9 +102,6 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 
 		// Check if lastMessage exists and has content
 		if (!lastMessage || !lastMessage.content) {
-			yield* _(
-				Console.log("Last message has no content, using default configuration"),
-			);
 			return getDefaultAgentResult(messages);
 		}
 
@@ -150,14 +126,8 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 			systemPrompt: strategy.systemPrompt,
 			enhancedMessages: enhancedMessages,
 			parameters: strategy.parameters,
+			intent: intent,
 		} as AgentResult;
 	}).pipe(
-		Effect.catchAll((error) =>
-			Effect.gen(function* (_) {
-				yield* _(Console.error("Agent processing failed:", error));
-				return getDefaultAgentResult(messages);
-			}),
-		),
-		Effect.tapErrorCause((cause) => Console.error("Agent error cause:", cause)),
-		Effect.timeout("10 seconds"), // Add timeout for safety
+		Effect.catchAll(() => Effect.succeed(getDefaultAgentResult(messages)))
 	);
