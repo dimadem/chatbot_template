@@ -1,5 +1,5 @@
 import { openai } from "@ai-sdk/openai";
-import { trace } from "@opentelemetry/api";
+import { type Span, trace } from "@opentelemetry/api";
 import {
 	convertToModelMessages,
 	type StreamTextResult,
@@ -11,128 +11,92 @@ import { chatAgentEffect } from "@/entities/agent/agents/chat-agent";
 
 export const maxDuration = 30;
 
-// Constants
 const MODEL_ID = "gpt-4.1" as const;
 
-// Narrowly typed text part and safe extraction without truncation
-type UITextPart = { type: "text"; text: string };
-const isUITextPart = (p: unknown): p is UITextPart => {
-	if (!p || typeof p !== "object") return false;
-	const part = p as Partial<UITextPart>;
-	return part.type === "text" && typeof part.text === "string";
-};
-
-const extractUserText = (messages: UIMessage[]): string => {
-	if (!Array.isArray(messages) || messages.length === 0) return "no content";
-	const last = messages[messages.length - 1];
-	const parts = last?.parts as UIMessage["parts"] | undefined;
-	if (!Array.isArray(parts)) return "no content";
-	const textPart = parts.find(isUITextPart);
-	return textPart?.text ?? "no content";
-};
-
-// Effect-based обработка всего API route
-const processChatRequest = (messages: UIMessage[]) =>
-	Effect.gen(function* (_) {
-		const userText = extractUserText(messages);
-		const modelMessages = convertToModelMessages(messages);
-
-		// Обработка агентом (встроенный трейсинг внутри)
-		const agentResult = yield* _(chatAgentEffect(modelMessages));
-
-		// AI стриминг с трейсингом
-		return yield* _(
-			Effect.sync(() =>
-				streamText({
-					model: openai(MODEL_ID),
-					system: agentResult.systemPrompt,
-					messages: agentResult.enhancedMessages,
-					...agentResult.parameters,
-					onFinish({ text, usage }) {
-						Effect.runSync(
-							Effect.logInfo("AI streaming completed", {
-								responseLength: text.length,
-								tokensUsed: usage?.totalTokens ?? 0,
-								intent: agentResult.intent,
-								temperature: agentResult.parameters.temperature,
-							}),
-						);
-					},
-				}),
-			).pipe(
-				Effect.withSpan("ai.stream-text", {
-					attributes: {
-						"ai.model": MODEL_ID,
-						"ai.temperature": agentResult.parameters.temperature,
-						"ai.system_prompt_length": agentResult.systemPrompt.length,
-						"ai.messages_count": agentResult.enhancedMessages.length,
-						"agent.intent": agentResult.intent,
-						"agent.context_used": agentResult.metadata.contextUsed,
-						"user.input_preview": userText,
-						"user.input_length": userText.length,
-						"request.messages_count": messages.length,
-					},
-				}),
-			),
+function processChatRequest(messages: UIMessage[], parentSpan: Span) {
+	return Effect.gen(function* () {
+		const chatAgentResult = yield* chatAgentEffect(
+			convertToModelMessages(messages),
 		);
-	}).pipe(
-		// Общий span для всего API запроса
-		Effect.withSpan("api.chat-request", {
-			attributes: {
-				"api.endpoint": "/api/chat",
-				"api.method": "POST",
-				"request.messages_count": messages.length,
-				"request.user_preview": extractUserText(messages),
+
+		// Устанавливаем input сразу после получения результата от агента
+		parentSpan.setAttributes({
+			"input.value": JSON.stringify(chatAgentResult.enhancedMessages),
+			// Дополнительные Langfuse атрибуты
+			"langfuse.generation.name": "chat-generation",
+			"langfuse.generation.model": MODEL_ID,
+		});
+
+		const result = streamText({
+			model: openai(MODEL_ID),
+			messages: chatAgentResult.enhancedMessages,
+			temperature: 0.7,
+			onFinish: ({ text, finishReason, usage }) => {
+				// Устанавливаем атрибуты для Langfuse Output
+				parentSpan.setAttributes({
+					// Output для Langfuse
+					"output.value": text,
+
+					// GenAI атрибуты для совместимости
+					"gen_ai.response.finish_reason": finishReason || "stop",
+					"gen_ai.usage.input_tokens": usage?.inputTokens || 0,
+					"gen_ai.usage.output_tokens": usage?.outputTokens || 0,
+					"gen_ai.usage.total_tokens": usage?.totalTokens || 0,
+
+					// Дополнительные метрики
+					"gen_ai.operation.name": "chat",
+					"gen_ai.system": "openai",
+					"gen_ai.request.model": MODEL_ID,
+					"gen_ai.response.model": MODEL_ID,
+				});
+
+				// Завершаем span сразу после установки атрибутов
+				parentSpan.setStatus({ code: 1 }); // SUCCESS
+				parentSpan.end();
 			},
-		}),
-	);
+		});
+
+		return result;
+	});
+}
 
 export async function POST(req: Request) {
-	const tracer = trace.getTracer("chatbot-api");
+	const tracer = trace.getTracer("ai", "1.0.0");
 
-	return tracer.startActiveSpan("api.chat-post", async (span) => {
-		try {
-			console.log("🚀 Starting chat API request with OTEL span");
-			span.setAttributes({
-				"api.endpoint": "/api/chat",
-				"api.method": "POST",
-			});
+	return tracer.startActiveSpan(
+		"chat-generation",
+		{ root: true },
+		async (span) => {
+			try {
+				const { messages }: { messages: UIMessage[] } = await req.json();
+				const modelMessages = convertToModelMessages(messages);
 
-			const { messages }: { messages: UIMessage[] } = await req.json();
-			span.setAttributes({
-				"request.messages_count": messages.length,
-			});
+				// Устанавливаем базовые GenAI атрибуты и Langfuse метаданные
+				span.setAttributes({
+					// Input для Langfuse - показываем пользовательский текст
+					"gen_ai.request.model": MODEL_ID,
+					"gen_ai.operation.name": "chat",
+					"gen_ai.system": "openai",
+					"gen_ai.request.messages.count": modelMessages.length,
+					// Langfuse атрибуты
+					"langfuse.trace.name": "chat-request",
+					"langfuse.tags": JSON.stringify(["api", "chat"]),
+				});
 
-			console.log("📊 Processing request with", messages.length, "messages");
-			const result = await Effect.runPromise(processChatRequest(messages));
-			console.log("✅ Chat processing completed successfully");
+				const result = await Effect.runPromise(
+					processChatRequest(messages, span),
+				);
 
-			span.setStatus({ code: 1 }); // OK
-			span.end();
-
-			return (
-				result as unknown as StreamTextResult<never, never>
-			).toUIMessageStreamResponse();
-		} catch (error) {
-			console.log("❌ Chat API request failed:", error);
-			span.recordException(error as Error);
-			span.setStatus({
-				code: 2, // ERROR
-				message: String(error),
-			});
-			span.end();
-
-			await Effect.runPromise(
-				Effect.logError("Chat API request failed", error).pipe(
-					Effect.withSpan("api.chat-error", {
-						attributes: {
-							"error.type": (error as Error).constructor.name,
-							"error.message": String(error),
-						},
-					}),
-				),
-			);
-			throw error;
-		}
-	});
+				return (
+					result as unknown as StreamTextResult<never, never>
+				).toUIMessageStreamResponse();
+			} catch (error) {
+				span.recordException(error as Error);
+				span.setStatus({ code: 2, message: String(error) }); // ERROR
+				span.end();
+				throw error;
+			}
+			// Span завершается в onFinish callback
+		},
+	);
 }
