@@ -9,7 +9,7 @@ import { MessageInput } from "@/features/send-message";
 export function ChatInterface() {
 	const [input, setInput] = useState("");
 
-	const { messages, sendMessage, status, stop, setMessages } = useChat({
+	const { messages, sendMessage, status, stop } = useChat({
 		transport: new DefaultChatTransport({
 			api: "/api/chat",
 		}),

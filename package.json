@@ -14,7 +14,6 @@
 	"dependencies": {
 		"@ai-sdk/openai": "^2.0.0",
 		"@ai-sdk/react": "^2.0.0",
-		"@openai/agents-extensions": "^0.0.14",
 		"@radix-ui/react-slot": "^1.2.3",
 		"@radix-ui/react-tooltip": "^1.2.7",
 		"@vercel/analytics": "^1.5.0",
@@ -22,6 +21,7 @@
 		"ai": "^5.0.0",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"effect": "^3.17.5",
 		"framer-motion": "^12.23.12",
 		"lucide-react": "^0.536.0",
 		"next": "15.4.5",
