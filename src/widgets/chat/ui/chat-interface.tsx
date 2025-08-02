@@ -22,7 +22,6 @@ export function ChatInterface() {
 			setInput("");
 		}
 	};
-	console.log("messages", messages);
 
 	return (
 		<div className="flex flex-col bg-background min-w-0 h-dvh">

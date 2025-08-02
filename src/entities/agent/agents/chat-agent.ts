@@ -101,6 +101,13 @@ const extractTextFromContent = (content: unknown): string => {
 	return "";
 };
 
+// Default agent result for fallback scenarios
+const getDefaultAgentResult = (messages: ModelMessage[]): AgentResult => ({
+	systemPrompt: "You are a helpful assistant.",
+	enhancedMessages: messages,
+	parameters: { temperature: 0.7 },
+});
+
 // Main agent logic
 export const chatAgentEffect = (messages: ModelMessage[]) =>
 	Effect.gen(function* (_) {
@@ -109,11 +116,7 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 			yield* _(
 				Console.log("No messages provided, using default configuration"),
 			);
-			return {
-				systemPrompt: "You are a helpful assistant.",
-				enhancedMessages: messages,
-				parameters: { temperature: 0.7 },
-			} as AgentResult;
+			return getDefaultAgentResult(messages);
 		}
 
 		const lastMessage = messages[messages.length - 1];
@@ -123,11 +126,7 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 			yield* _(
 				Console.log("Last message has no content, using default configuration"),
 			);
-			return {
-				systemPrompt: "You are a helpful assistant.",
-				enhancedMessages: messages,
-				parameters: { temperature: 0.7 },
-			} as AgentResult;
+			return getDefaultAgentResult(messages);
 		}
 
 		// Extract text content from the message
@@ -156,11 +155,7 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 		Effect.catchAll((error) =>
 			Effect.gen(function* (_) {
 				yield* _(Console.error("Agent processing failed:", error));
-				return {
-					systemPrompt: "You are a helpful assistant.",
-					enhancedMessages: messages,
-					parameters: { temperature: 0.7 },
-				} as AgentResult;
+				return getDefaultAgentResult(messages);
 			}),
 		),
 		Effect.tapErrorCause((cause) => Console.error("Agent error cause:", cause)),
