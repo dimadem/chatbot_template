@@ -9,22 +9,27 @@ interface TextPart {
 type Intent = "help_request" | "order_inquiry" | "general_chat";
 
 export interface AgentResult {
-	systemPrompt: string;
-	enhancedMessages: ModelMessage[];
-	parameters: { temperature: number };
-	intent: Intent;
-	metadata: {
-		contextUsed: boolean;
-		processingTimeMs: number;
+	readonly systemPrompt: string;
+	readonly enhancedMessages: ModelMessage[];
+	readonly parameters: { readonly temperature: number };
+	readonly intent: Intent;
+	readonly metadata: {
+		readonly contextUsed: boolean;
+		readonly processingTimeMs: number;
 	};
 }
 
 const DEFAULT_PROMPT = "You are a helpful assistant." as const;
 const DEFAULT_PARAMS = { temperature: 0.7 } as const;
 
-const STRATEGIES: Record<
-	Intent,
-	{ systemPrompt: string; parameters: { temperature: number } }
+const STRATEGIES: Readonly<
+	Record<
+		Intent,
+		{
+			readonly systemPrompt: string;
+			readonly parameters: { readonly temperature: number };
+		}
+	>
 > = {
 	help_request: {
 		systemPrompt:
@@ -39,10 +44,17 @@ const STRATEGIES: Record<
 		systemPrompt: "You are a friendly assistant. Communicate casually.",
 		parameters: { temperature: 0.8 },
 	},
-};
+} as const;
 
-const isEmptyInput = (messages: ModelMessage[]) =>
-	messages.length === 0 || !messages[messages.length - 1]?.content;
+const isEmptyInput = (messages: readonly ModelMessage[]) => {
+	if (messages.length === 0) return true;
+
+	const lastMessage = messages[messages.length - 1];
+	if (!lastMessage?.content) return true;
+
+	const textContent = extractTextFromContent(lastMessage.content);
+	return !textContent || textContent.trim().length === 0;
+};
 
 const extractTextFromContent = (content: unknown): string => {
 	if (typeof content === "string") return content;
@@ -60,14 +72,14 @@ const extractTextFromContent = (content: unknown): string => {
 	return "";
 };
 
-const analyzeUserIntent = (content: string) =>
+const analyzeUserIntent = (content: string): Effect.Effect<Intent> =>
 	Effect.sync(() => {
 		const c = content.toLowerCase();
 		if (c.includes("help") || c.includes("помощь"))
-			return "help_request" as Intent;
+			return "help_request" as const;
 		if (c.includes("order") || c.includes("заказ"))
-			return "order_inquiry" as Intent;
-		return "general_chat" as Intent;
+			return "order_inquiry" as const;
+		return "general_chat" as const;
 	}).pipe(
 		Effect.withSpan("agent.analyze-intent", {
 			attributes: {
@@ -77,22 +89,27 @@ const analyzeUserIntent = (content: string) =>
 		}),
 	);
 
-const selectResponseStrategy = (intent: Intent) =>
+const selectResponseStrategy = (
+	intent: Intent,
+): Effect.Effect<(typeof STRATEGIES)[Intent]> =>
 	Effect.sync(() => STRATEGIES[intent]).pipe(
 		Effect.withSpan("agent.select-strategy", {
 			attributes: { "agent.intent": intent },
 		}),
 	);
 
-const getRelevantContext = (messages: ModelMessage[], intent: Intent) =>
+const getRelevantContext = (
+	messages: readonly ModelMessage[],
+	intent: Intent,
+): Effect.Effect<{ readonly context: string; readonly used: boolean }> =>
 	Effect.sync(() => {
 		if (intent === "order_inquiry") {
 			return {
 				context: "Context: The user has active orders #12345, #67890",
 				used: true,
-			};
+			} as const;
 		}
-		return { context: "", used: false };
+		return { context: "", used: false } as const;
 	}).pipe(
 		Effect.withSpan("agent.get-context", {
 			attributes: {
@@ -102,16 +119,18 @@ const getRelevantContext = (messages: ModelMessage[], intent: Intent) =>
 		}),
 	);
 
-export const chatAgentEffect = (messages: ModelMessage[]) =>
-	Effect.gen(function* (_) {
+export const chatAgentEffect = (
+	messages: readonly ModelMessage[],
+): Effect.Effect<AgentResult> =>
+	Effect.gen(function* () {
 		const startTime = Date.now();
 
 		if (isEmptyInput(messages)) {
 			return {
 				systemPrompt: DEFAULT_PROMPT,
-				enhancedMessages: messages,
+				enhancedMessages: [...messages], // Create immutable copy
 				parameters: { ...DEFAULT_PARAMS },
-				intent: "general_chat",
+				intent: "general_chat" as const,
 				metadata: {
 					contextUsed: false,
 					processingTimeMs: Date.now() - startTime,
@@ -122,13 +141,13 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 		const lastMessageContent = messages[messages.length - 1]?.content ?? "";
 		const textContent = extractTextFromContent(lastMessageContent);
 
-		const intent = yield* _(analyzeUserIntent(textContent));
-		const strategy = yield* _(selectResponseStrategy(intent));
-		const contextData = yield* _(getRelevantContext(messages, intent));
+		const intent = yield* analyzeUserIntent(textContent);
+		const strategy = yield* selectResponseStrategy(intent);
+		const contextData = yield* getRelevantContext(messages, intent);
 
-		const enhancedMessages = contextData.used
+		const enhancedMessages: ModelMessage[] = contextData.used
 			? [...messages, { role: "system" as const, content: contextData.context }]
-			: messages;
+			: [...messages]; // Create immutable copy
 
 		return {
 			systemPrompt: strategy.systemPrompt,
@@ -139,7 +158,7 @@ export const chatAgentEffect = (messages: ModelMessage[]) =>
 				contextUsed: contextData.used,
 				processingTimeMs: Date.now() - startTime,
 			},
-		} as AgentResult;
+		} satisfies AgentResult;
 	}).pipe(
 		Effect.withSpan("agent.chat-processing", {
 			attributes: {
