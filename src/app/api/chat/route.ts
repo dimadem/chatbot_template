@@ -1,4 +1,5 @@
 import { openai } from "@ai-sdk/openai";
+import { trace } from "@opentelemetry/api";
 import {
 	convertToModelMessages,
 	type StreamTextResult,
@@ -87,23 +88,51 @@ const processChatRequest = (messages: UIMessage[]) =>
 	);
 
 export async function POST(req: Request) {
-	try {
-		const { messages }: { messages: UIMessage[] } = await req.json();
-		const result = await Effect.runPromise(processChatRequest(messages));
-		return (
-			result as unknown as StreamTextResult<never, never>
-		).toUIMessageStreamResponse();
-	} catch (error) {
-		await Effect.runPromise(
-			Effect.logError("Chat API request failed", error).pipe(
-				Effect.withSpan("api.chat-error", {
-					attributes: {
-						"error.type": (error as Error).constructor.name,
-						"error.message": String(error),
-					},
-				}),
-			),
-		);
-		throw error;
-	}
+	const tracer = trace.getTracer("chatbot-api");
+
+	return tracer.startActiveSpan("api.chat-post", async (span) => {
+		try {
+			console.log("🚀 Starting chat API request with OTEL span");
+			span.setAttributes({
+				"api.endpoint": "/api/chat",
+				"api.method": "POST",
+			});
+
+			const { messages }: { messages: UIMessage[] } = await req.json();
+			span.setAttributes({
+				"request.messages_count": messages.length,
+			});
+
+			console.log("📊 Processing request with", messages.length, "messages");
+			const result = await Effect.runPromise(processChatRequest(messages));
+			console.log("✅ Chat processing completed successfully");
+
+			span.setStatus({ code: 1 }); // OK
+			span.end();
+
+			return (
+				result as unknown as StreamTextResult<never, never>
+			).toUIMessageStreamResponse();
+		} catch (error) {
+			console.log("❌ Chat API request failed:", error);
+			span.recordException(error as Error);
+			span.setStatus({
+				code: 2, // ERROR
+				message: String(error),
+			});
+			span.end();
+
+			await Effect.runPromise(
+				Effect.logError("Chat API request failed", error).pipe(
+					Effect.withSpan("api.chat-error", {
+						attributes: {
+							"error.type": (error as Error).constructor.name,
+							"error.message": String(error),
+						},
+					}),
+				),
+			);
+			throw error;
+		}
+	});
 }
