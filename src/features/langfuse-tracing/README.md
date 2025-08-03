@@ -1,12 +1,258 @@
 # Интеграция трассировки Langfuse
 
-Современное решение трассировки на основе Effect, оптимизированное для Vercel/серверных сред.
+Современное решение трассировки на основе Effect, оптимизированное для Vercel/серверных сред с поддержкой FSD архитектуры.
 
 ## Обзор
 
 Этот функционал обеспечивает чистую, типобезопасную интеграцию между платформой наблюдаемости [Langfuse](https://langfuse.com/) и Effect-TS, с особыми оптимизациями для серверных развертываний.
 
-## Архитектура
+## Архитектура (FSD)
+
+```
+src/features/langfuse-tracing/
+├── index.ts                    # Экспорт публичного API
+├── README.md                   # Эта документация
+├── lib/
+│   ├── langfuse-effect.ts     # Основной обертка Effect для сервиса
+│   ├── langfuse-helpers.ts    # Утилиты высокого уровня
+│   ├── usage-mappers.ts       # Маппинг типов usage (NEW!)
+│   └── vercel-helpers.ts      # Оптимизации для серверных сред
+└── model/
+    └── types.ts               # Определения типов
+```
+
+## Быстрый старт
+
+### 1. Основная настройка
+
+```typescript
+import { 
+  LangfuseLayer, 
+  withLangfuseVercelFlush,
+  mapVercelUsageToLangfuse 
+} from "@/features/langfuse-tracing";
+
+// В вашем API маршруте
+export async function POST(req: Request) {
+  const result = await Effect.runPromise(
+    withLangfuseVercelFlush(
+      myBusinessLogic()
+    ).pipe(Effect.provide(LangfuseLayer))
+  );
+  return result;
+}
+```
+
+### 2. Переменные окружения
+
+```bash
+# Обязательные
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+
+# Необязательные
+LANGFUSE_HOST=https://cloud.langfuse.com  # По умолчанию
+LANGFUSE_DEBUG=true                       # Включить подробное логирование
+LANGFUSE_SAMPLE_RATE=0.1                 # Выборка 10% трасс
+```
+
+## Основные концепции
+
+### 1. Слой сервиса Effect
+
+Интеграция оборачивает SDK Langfuse в сервис Effect, предоставляя:
+
+- **Типобезопасность**: полная поддержка TypeScript
+- **Композиция**: легко комбинируется с другими Effect-сервисами  
+- **Обработка ошибок**: встроенная обработка через Effect
+- **Тестирование**: простое моккинг через Effect.provide()
+
+### 2. Серверная оптимизация
+
+- **Vercel Functions**: неблокирующий flush через `waitUntil`
+- **Serverless**: адаптировано для коротких выполнений
+- **Batching**: автоматическая группировка событий
+
+### 3. Usage маппинг (NEW!)
+
+Автоматическое преобразование между форматами:
+- **Vercel AI SDK**: `{ inputTokens, outputTokens, totalTokens }`
+- **Langfuse API**: `{ promptTokens, completionTokens, totalTokens }`
+
+## Создание трасс
+
+```typescript
+import { createVercelChatTrace } from "@/features/langfuse-tracing";
+
+const trace = yield* createVercelChatTrace(
+  "chat-request",
+  { messages: [...] },
+  {
+    model: "gpt-4",
+    environment: "development",
+    userId: "user-123",
+  }
+);
+```
+
+## Отслеживание генераций AI с маппингом usage
+
+```typescript
+import { mapVercelUsageToLangfuse } from "@/features/langfuse-tracing";
+
+const generation = yield* trace.generation({
+  name: "chat-completion",
+  model: "gpt-4",
+  input: messages,
+});
+
+// В onFinish callback
+onFinish: (event) => {
+  Effect.runSync(
+    generation.update({
+      output: event.text,
+      usage: mapVercelUsageToLangfuse(event.usage), // Автоматический маппинг!
+    })
+  );
+}
+```
+
+## Утилиты для работы с Usage
+
+### mapVercelUsageToLangfuse
+
+Автоматически преобразует формат usage из Vercel AI SDK в формат Langfuse:
+
+```typescript
+import { mapVercelUsageToLangfuse, type VercelUsage } from "@/features/langfuse-tracing";
+
+// Vercel AI SDK usage
+const vercelUsage: VercelUsage = {
+  inputTokens: 100,
+  outputTokens: 50,
+  totalTokens: 150
+};
+
+// Автоматическое преобразование
+const langfuseUsage = mapVercelUsageToLangfuse(vercelUsage);
+// Результат: { promptTokens: 100, completionTokens: 50, totalTokens: 150 }
+```
+
+### isValidUsage
+
+Проверяет валидность данных usage:
+
+```typescript
+import { isValidUsage } from "@/features/langfuse-tracing";
+
+if (isValidUsage(event.usage)) {
+  const usage = mapVercelUsageToLangfuse(event.usage);
+  // Безопасное использование
+}
+```
+
+## Примеры использования
+
+### 1. Простой API route
+
+```typescript
+import { 
+  LangfuseLayer, 
+  withLangfuseVercelFlush,
+  createVercelChatTrace,
+  mapVercelUsageToLangfuse 
+} from "@/features/langfuse-tracing";
+
+export async function POST(req: Request) {
+  try {
+    const { messages } = await req.json();
+    
+    const result = await Effect.runPromise(
+      withLangfuseVercelFlush(
+        Effect.gen(function* () {
+          // Создаем трейс
+          const trace = yield* createVercelChatTrace(
+            "chat-request",
+            { messages },
+            { model: "gpt-4", userId: "user-123" }
+          );
+
+          // Создаем генерацию
+          const generation = yield* trace.generation({
+            name: "chat-completion",
+            model: "gpt-4",
+            input: messages,
+          });
+
+          // Вызываем LLM
+          const response = streamText({
+            model: openai("gpt-4"),
+            messages,
+            onFinish: (event) => {
+              Effect.runSync(
+                generation.update({
+                  output: event.text,
+                  usage: mapVercelUsageToLangfuse(event.usage), // ✨ Простой маппинг
+                })
+              );
+            },
+          });
+
+          return response;
+        })
+      ).pipe(Effect.provide(LangfuseLayer))
+    );
+
+    return result.toUIMessageStreamResponse();
+  } catch (error) {
+    return new Response("Error", { status: 500 });
+  }
+}
+```
+
+### 2. Использование в бизнес-логике
+
+```typescript
+import { LangfuseService, mapVercelUsageToLangfuse } from "@/features/langfuse-tracing";
+
+export const processUserQuery = (query: string) =>
+  Effect.gen(function* () {
+    const langfuse = yield* LangfuseService;
+    
+    const trace = yield* langfuse.createTrace("user-query-processing");
+    
+    // Ваша бизнес-логика
+    const result = yield* someBusinessLogic(query);
+    
+    yield* trace.update({ 
+      output: result,
+      metadata: { queryLength: query.length }
+    });
+    
+    return result;
+  });
+```
+
+### 3. Переиспользование в разных частях приложения
+
+```typescript
+// В любом месте приложения
+import { withLangfuseTrace } from "@/features/langfuse-tracing";
+
+export const analyzeDocument = (document: string) =>
+  withLangfuseTrace(
+    "document-analysis",
+    Effect.gen(function* () {
+      // Логика анализа документа
+      return yield* performAnalysis(document);
+    })
+  );
+
+// Использование
+const result = await Effect.runPromise(
+  analyzeDocument("some document").pipe(Effect.provide(LangfuseLayer))
+);
+```
 
 ```
 src/features/langfuse-tracing/

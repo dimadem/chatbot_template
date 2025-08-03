@@ -1,5 +1,6 @@
 import type { ModelMessage } from "ai";
 import { Effect } from "effect";
+import type { VercelUsage } from "../model/types";
 import { LangfuseService, type LangfuseTrace } from "./langfuse-effect";
 
 export type ChatRequestParams = {
@@ -11,11 +12,7 @@ export type ChatRequestParams = {
 export type ChatResultParams = {
 	text: string;
 	finishReason?: string;
-	usage?: {
-		inputTokens?: number | undefined;
-		outputTokens?: number | undefined;
-		totalTokens?: number | undefined;
-	};
+	usage?: VercelUsage;
 };
 
 // Effect wrapper for the entire chat flow using Langfuse SDK

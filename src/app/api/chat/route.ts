@@ -10,6 +10,7 @@ import { chatAgentEffect } from "@/entities/agent/agents/chat-agent";
 import {
 	createVercelChatTrace,
 	LangfuseLayer,
+	mapVercelUsageToLangfuse,
 	withLangfuseVercelFlush,
 } from "@/features/langfuse-tracing";
 
@@ -50,11 +51,7 @@ function processChatRequest(messages: readonly ModelMessage[]) {
 					Effect.runSync(
 						generation.update({
 							output: event.text,
-							usage: {
-								promptTokens: event.usage.inputTokens ?? 0,
-								completionTokens: event.usage.outputTokens ?? 0,
-								totalTokens: event.usage.totalTokens ?? 0,
-							},
+							usage: mapVercelUsageToLangfuse(event.usage),
 						}),
 					);
 				},

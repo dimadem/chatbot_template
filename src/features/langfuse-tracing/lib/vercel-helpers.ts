@@ -1,5 +1,6 @@
 import { waitUntil } from "@vercel/functions";
 import * as Effect from "effect/Effect";
+import type { ChatTraceMetadata } from "../model/types";
 import { LangfuseService } from "./langfuse-effect";
 
 // Wrapper to handle Langfuse flush in serverless environments
@@ -35,7 +36,7 @@ export const withLangfuseServerlessShutdown = <A, E>(
 export const createVercelChatTrace = (
 	name: string,
 	input: unknown,
-	metadata?: Record<string, unknown>,
+	metadata?: Partial<ChatTraceMetadata>,
 ) =>
 	Effect.gen(function* () {
 		const langfuse = yield* LangfuseService;

@@ -1,5 +1,6 @@
 import { Context, Effect, Layer } from "effect";
-import { type ApiIngestionUsage, Langfuse } from "langfuse";
+import { Langfuse } from "langfuse";
+import type { UsageMapping } from "../model/types";
 
 // Langfuse service interface
 export interface LangfuseService {
@@ -28,7 +29,7 @@ export interface LangfuseTrace {
 		model: string;
 		input: unknown;
 		output?: unknown;
-		usage?: ApiIngestionUsage;
+		usage?: UsageMapping;
 	}) => Effect.Effect<LangfuseGeneration>;
 }
 
@@ -45,7 +46,7 @@ export interface LangfuseSpan {
 export interface LangfuseGeneration {
 	readonly update: (params: {
 		output?: unknown;
-		usage?: ApiIngestionUsage;
+		usage?: UsageMapping;
 	}) => Effect.Effect<void>;
 	readonly end: () => Effect.Effect<void>;
 }
@@ -126,7 +127,7 @@ const makeLangfuseService = (): LangfuseService => {
 						model: string;
 						input: unknown;
 						output?: unknown;
-						usage?: ApiIngestionUsage;
+						usage?: UsageMapping;
 					}) =>
 						Effect.sync(() => {
 							const generationParams: Record<string, unknown> = {
@@ -145,7 +146,7 @@ const makeLangfuseService = (): LangfuseService => {
 							return {
 								update: (updateParams: {
 									output?: unknown;
-									usage?: ApiIngestionUsage;
+									usage?: UsageMapping;
 								}) =>
 									Effect.sync(() => {
 										const updateGenParams: Record<string, unknown> = {};

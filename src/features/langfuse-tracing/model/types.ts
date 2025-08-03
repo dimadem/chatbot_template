@@ -1,13 +1,14 @@
 import type { Span } from "@opentelemetry/api";
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
+import type { ApiIngestionUsage } from "langfuse";
 
 export type TracingAttributes = Record<string, string | number | boolean>;
 
 export interface UsageMetrics {
-	readonly inputTokens?: number;
-	readonly outputTokens?: number;
-	readonly totalTokens?: number;
+	readonly inputTokens: number;
+	readonly outputTokens: number;
+	readonly totalTokens: number;
 }
 
 export interface SpanConfig {
@@ -59,3 +60,40 @@ export class SpanNotFoundError extends Error {
 		super(message);
 	}
 }
+
+// Langfuse specific types for better FSD organization
+
+/**
+ * Usage mapping from Vercel AI SDK to Langfuse format
+ */
+export type UsageMapping = ApiIngestionUsage;
+
+/**
+ * Vercel AI SDK usage format (matches actual event.usage structure)
+ */
+export type VercelUsage = {
+	inputTokens?: number | undefined;
+	outputTokens?: number | undefined;
+	totalTokens?: number | undefined;
+};
+
+/**
+ * Chat trace metadata for better organization
+ */
+export type ChatTraceMetadata = {
+	model: string;
+	environment?: string;
+	userId?: string;
+	sessionId?: string;
+	version?: string;
+};
+
+/**
+ * Langfuse configuration type
+ */
+export type LangfuseConfig = {
+	publicKey: string;
+	secretKey: string;
+	baseUrl?: string;
+	sampleRate?: number;
+};
