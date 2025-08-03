@@ -1,8 +1,9 @@
-// Direct Langfuse SDK approach (recommended)
+// Simple Langfuse tracing with Effect.ts
 export * from "./lib/langfuse-effect";
 export {
 	createChatGeneration,
 	updateChatGeneration,
+	withChatTrace,
 	withLangfuseTrace,
 } from "./lib/langfuse-helpers";
 
@@ -12,13 +13,13 @@ export {
 	mapVercelUsageToLangfuse,
 } from "./lib/usage-mappers";
 
-// Vercel-specific helpers for serverless environments
+// Vercel-specific helpers
 export {
 	createVercelChatTrace,
 	withLangfuseVercelFlush,
 } from "./lib/vercel-helpers";
 
-// Types (единый источник истины)
+// Types
 export type {
 	ChatTraceMetadata,
 	LangfuseConfig,

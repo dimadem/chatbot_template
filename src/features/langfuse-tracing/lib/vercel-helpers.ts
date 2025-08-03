@@ -1,9 +1,9 @@
 import { waitUntil } from "@vercel/functions";
 import * as Effect from "effect/Effect";
 import type { ChatTraceMetadata } from "../model/types";
-import { LangfuseService } from "./langfuse-effect";
+import { LangfuseService, type LangfuseTrace } from "./langfuse-effect";
 
-// Wrapper to handle Langfuse flush in serverless environments
+// Simple Vercel flush wrapper
 export const withLangfuseVercelFlush = <A, E>(
 	effect: Effect.Effect<A, E, LangfuseService>,
 ) =>
@@ -11,38 +11,24 @@ export const withLangfuseVercelFlush = <A, E>(
 		const langfuse = yield* LangfuseService;
 		const result = yield* effect;
 
-		// Get flush promise and pass to Vercel's waitUntil
+		// Get flush promise for Vercel waitUntil
 		const flushPromise = yield* langfuse.getFlushPromise();
 		waitUntil(flushPromise);
 
 		return result;
 	});
 
-// For cases where you need to ensure completion before response
-export const withLangfuseServerlessShutdown = <A, E>(
-	effect: Effect.Effect<A, E, LangfuseService>,
-) =>
-	Effect.gen(function* () {
-		const langfuse = yield* LangfuseService;
-		const result = yield* effect;
-
-		// Wait for shutdown to complete
-		yield* langfuse.shutdown();
-
-		return result;
-	});
-
-// Helper for chat completions with proper Vercel handling
+// Simple trace creator for Vercel
 export const createVercelChatTrace = (
 	name: string,
 	input: unknown,
 	metadata?: Partial<ChatTraceMetadata>,
-) =>
+): Effect.Effect<LangfuseTrace, never, LangfuseService> =>
 	Effect.gen(function* () {
 		const langfuse = yield* LangfuseService;
 		const trace = yield* langfuse.createTrace(name, input);
 
-		// Update with metadata if provided
+		// Add metadata if provided
 		if (metadata) {
 			yield* trace.update({ metadata });
 		}

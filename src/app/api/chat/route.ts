@@ -47,12 +47,18 @@ function processChatRequest(messages: readonly ModelMessage[]) {
 				messages: chatAgentResult.enhancedMessages,
 				temperature: chatAgentResult.parameters.temperature,
 				onFinish: (event) => {
-					// Update generation with result
+					// Update generation with result using Effect error handling
 					Effect.runSync(
-						generation.update({
-							output: event.text,
-							usage: mapVercelUsageToLangfuse(event.usage),
-						}),
+						generation
+							.update({
+								output: event.text,
+								usage: mapVercelUsageToLangfuse(event.usage),
+							})
+							.pipe(
+								Effect.catchAll((error) =>
+									Effect.logWarning("Failed to update generation", error),
+								),
+							),
 					);
 				},
 			});
@@ -79,10 +85,23 @@ export async function POST(req: Request) {
 		);
 
 		return result.toUIMessageStreamResponse();
-	} catch (_error) {
-		return new Response(JSON.stringify({ error: "Internal server error" }), {
-			status: 500,
-			headers: { "Content-Type": "application/json" },
-		});
+	} catch (error) {
+		console.error("Chat API Error:", error);
+
+		const errorMessage =
+			error instanceof Error ? error.message : "Internal server error";
+
+		return new Response(
+			JSON.stringify({
+				error: errorMessage,
+				...(process.env.NODE_ENV === "development" && {
+					stack: error instanceof Error ? error.stack : undefined,
+				}),
+			}),
+			{
+				status: 500,
+				headers: { "Content-Type": "application/json" },
+			},
+		);
 	}
 }
