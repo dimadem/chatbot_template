@@ -48,13 +48,16 @@ const extractTextFromContent = (content: unknown): string => {
 };
 
 // LLM-based lightweight classifier prompt
-const CLASSIFIER_SYSTEM_PROMPT = `You are a strict router. Decide if the user's last message is a direct question (type: "question") or a creative ideation request (type: "ideate").
+const _CLASSIFIER_SYSTEM_PROMPT =
+	`You are a strict router. Decide if the user's last message is a direct question (type: "question") or a creative ideation request (type: "ideate").
 Return ONLY a compact JSON: {"type":"question"} or {"type":"ideate"}.
 Treat verbs like "invent", "create", "come up with", "придумай", "сгенерируй" as ideate. Questions like "how", "why", "what", "когда", "почему" are question.` as const;
 
 // These agents are just system prompts with small parameter tweaks
-const JOKE_AGENT_PROMPT = `You are a witty assistant. Always answer briefly, friendly, and with light humor. Avoid offensive or toxic jokes.` as const;
-const VIS_AGENT_PROMPT = `You are a creative assistant. Always provide a concise answer AND a visualization section.
+const JOKE_AGENT_PROMPT =
+	"You are a witty assistant. Always answer briefly, friendly, and with light humor. Avoid offensive or toxic jokes." as const;
+const VIS_AGENT_PROMPT =
+	`You are a creative assistant. Always provide a concise answer AND a visualization section.
 Structure:
 1) Brief answer
 2) Visualization: one of ASCII art, simple diagram, bullet structure, or code block pseudo-graphics relevant to the idea.
@@ -64,13 +67,14 @@ Keep it safe and non-offensive.` as const;
 // We don't import model here; the outer route uses systemPrompt/messages. So we produce
 // an intermediate message list to classify, then choose the final agent prompts.
 const classifyWithLLM = (
-	messages: readonly ModelMessage[],
+	_messages: readonly ModelMessage[],
 	lastText: string,
 ): Effect.Effect<RouteType> =>
 	Effect.sync(() => {
 		// Heuristic fallback if LLM classification fails downstream: quick rule-of-thumb
 		const txt = lastText.toLowerCase();
-		const looksIdeate = /придум|создай|сгенерируй|invent|create|come up|brainstorm/.test(txt);
+		const looksIdeate =
+			/придум|создай|сгенерируй|invent|create|come up|brainstorm/.test(txt);
 		return looksIdeate ? "ideate" : "question";
 	}).pipe(
 		Effect.withSpan("agent.classify", {
@@ -90,7 +94,10 @@ export const chatAgentEffect = (
 				enhancedMessages: [...messages],
 				parameters: { ...DEFAULT_PARAMS, temperature: 0.8 },
 				intent: "question",
-				metadata: { contextUsed: false, processingTimeMs: Date.now() - startTime },
+				metadata: {
+					contextUsed: false,
+					processingTimeMs: Date.now() - startTime,
+				},
 			} satisfies AgentResult;
 		}
 
@@ -101,8 +108,10 @@ export const chatAgentEffect = (
 		const route = yield* classifyWithLLM(messages, textContent);
 
 		// Build final agent
-		const systemPrompt = route === "ideate" ? VIS_AGENT_PROMPT : JOKE_AGENT_PROMPT;
-		const parameters = route === "ideate" ? { temperature: 0.5 } : { temperature: 0.8 };
+		const systemPrompt =
+			route === "ideate" ? VIS_AGENT_PROMPT : JOKE_AGENT_PROMPT;
+		const parameters =
+			route === "ideate" ? { temperature: 0.5 } : { temperature: 0.8 };
 
 		// Optionally prepend a classifier system message to bias routing when model runs
 		const enhancedMessages: ModelMessage[] = [
@@ -115,13 +124,17 @@ export const chatAgentEffect = (
 			enhancedMessages,
 			parameters,
 			intent: route,
-			metadata: { contextUsed: false, processingTimeMs: Date.now() - startTime },
+			metadata: {
+				contextUsed: false,
+				processingTimeMs: Date.now() - startTime,
+			},
 		} satisfies AgentResult;
 	}).pipe(
 		Effect.withSpan("agent.chat-processing", {
 			attributes: {
 				"agent.input_messages_count": messages.length,
-				"agent.last_message_role": messages[messages.length - 1]?.role ?? "unknown",
+				"agent.last_message_role":
+					messages[messages.length - 1]?.role ?? "unknown",
 			},
 		}),
 	);

@@ -1,55 +1,61 @@
 import type { Span } from "@opentelemetry/api";
 import * as Context from "effect/Context";
-import * as Effect from "effect/Effect";
+import type * as Effect from "effect/Effect";
 
 export type TracingAttributes = Record<string, string | number | boolean>;
 
 export interface UsageMetrics {
-  readonly inputTokens?: number;
-  readonly outputTokens?: number;
-  readonly totalTokens?: number;
+	readonly inputTokens?: number;
+	readonly outputTokens?: number;
+	readonly totalTokens?: number;
 }
 
 export interface SpanConfig {
-  readonly name: string;
-  readonly attributes?: TracingAttributes;
+	readonly name: string;
+	readonly attributes?: TracingAttributes;
 }
 
 export interface LangfuseObservation {
-  readonly model: string;
-  readonly input: string;
-  readonly output?: string;
-  readonly usage?: UsageMetrics;
-  readonly finishReason?: string;
+	readonly model: string;
+	readonly input: string;
+	readonly output?: string;
+	readonly usage?: UsageMetrics;
+	readonly finishReason?: string;
 }
 
 // Effect Services
 export interface TracingService {
-  readonly startSpan: (config: SpanConfig) => Effect.Effect<Span>;
-  readonly withSpan: <A, E, R>(
-    config: SpanConfig,
-    effect: Effect.Effect<A, E, R>
-  ) => Effect.Effect<A, E, R>;
-  readonly setAttributes: (attributes: TracingAttributes) => Effect.Effect<void>;
-  readonly recordLangfuseRequest: (model: string, input: string) => Effect.Effect<void>;
-  readonly recordLangfuseResult: (
-    output: string,
-    usage?: UsageMetrics,
-    finishReason?: string
-  ) => Effect.Effect<void>;
+	readonly startSpan: (config: SpanConfig) => Effect.Effect<Span>;
+	readonly withSpan: <A, E, R>(
+		config: SpanConfig,
+		effect: Effect.Effect<A, E, R>,
+	) => Effect.Effect<A, E, R>;
+	readonly setAttributes: (
+		attributes: TracingAttributes,
+	) => Effect.Effect<void>;
+	readonly recordLangfuseRequest: (
+		model: string,
+		input: string,
+	) => Effect.Effect<void>;
+	readonly recordLangfuseResult: (
+		output: string,
+		usage?: UsageMetrics,
+		finishReason?: string,
+	) => Effect.Effect<void>;
 }
 
-export const TracingService = Context.GenericTag<TracingService>("TracingService");
+export const TracingService =
+	Context.GenericTag<TracingService>("TracingService");
 
 // Errors
 export class TracingError extends Error {
-  readonly _tag = "TracingError";
+	readonly _tag = "TracingError";
 }
 
 export class SpanNotFoundError extends Error {
-  readonly _tag = "SpanNotFoundError";
-  
-  constructor(message = "No active span found") {
-    super(message);
-  }
+	readonly _tag = "SpanNotFoundError";
+
+	constructor(message = "No active span found") {
+		super(message);
+	}
 }
