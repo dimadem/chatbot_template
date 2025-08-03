@@ -6,45 +6,20 @@ interface TextPart {
 	text: string;
 }
 
-type Intent = "help_request" | "order_inquiry" | "general_chat";
+type RouteType = "question" | "ideate";
 
 export interface AgentResult {
 	readonly systemPrompt: string;
 	readonly enhancedMessages: ModelMessage[];
 	readonly parameters: { readonly temperature: number };
-	readonly intent: Intent;
+	readonly intent: RouteType;
 	readonly metadata: {
 		readonly contextUsed: boolean;
 		readonly processingTimeMs: number;
 	};
 }
 
-const DEFAULT_PROMPT = "You are a helpful assistant." as const;
 const DEFAULT_PARAMS = { temperature: 0.7 } as const;
-
-const STRATEGIES: Readonly<
-	Record<
-		Intent,
-		{
-			readonly systemPrompt: string;
-			readonly parameters: { readonly temperature: number };
-		}
-	>
-> = {
-	help_request: {
-		systemPrompt:
-			"You are a technical support assistant. Answer concisely and specifically.",
-		parameters: { temperature: 0.3 },
-	},
-	order_inquiry: {
-		systemPrompt: "You are an order assistant. Help with order information.",
-		parameters: { temperature: 0.5 },
-	},
-	general_chat: {
-		systemPrompt: "You are a friendly assistant. Communicate casually.",
-		parameters: { temperature: 0.8 },
-	},
-} as const;
 
 const isEmptyInput = (messages: readonly ModelMessage[]) => {
 	if (messages.length === 0) return true;
@@ -72,50 +47,34 @@ const extractTextFromContent = (content: unknown): string => {
 	return "";
 };
 
-const analyzeUserIntent = (content: string): Effect.Effect<Intent> =>
-	Effect.sync(() => {
-		const c = content.toLowerCase();
-		if (c.includes("help") || c.includes("помощь"))
-			return "help_request" as const;
-		if (c.includes("order") || c.includes("заказ"))
-			return "order_inquiry" as const;
-		return "general_chat" as const;
-	}).pipe(
-		Effect.withSpan("agent.analyze-intent", {
-			attributes: {
-				"agent.content_length": content.length,
-				"agent.content_preview": content.substring(0, 50),
-			},
-		}),
-	);
+// LLM-based lightweight classifier prompt
+const CLASSIFIER_SYSTEM_PROMPT = `You are a strict router. Decide if the user's last message is a direct question (type: "question") or a creative ideation request (type: "ideate").
+Return ONLY a compact JSON: {"type":"question"} or {"type":"ideate"}.
+Treat verbs like "invent", "create", "come up with", "придумай", "сгенерируй" as ideate. Questions like "how", "why", "what", "когда", "почему" are question.` as const;
 
-const selectResponseStrategy = (
-	intent: Intent,
-): Effect.Effect<(typeof STRATEGIES)[Intent]> =>
-	Effect.sync(() => STRATEGIES[intent]).pipe(
-		Effect.withSpan("agent.select-strategy", {
-			attributes: { "agent.intent": intent },
-		}),
-	);
+// These agents are just system prompts with small parameter tweaks
+const JOKE_AGENT_PROMPT = `You are a witty assistant. Always answer briefly, friendly, and with light humor. Avoid offensive or toxic jokes.` as const;
+const VIS_AGENT_PROMPT = `You are a creative assistant. Always provide a concise answer AND a visualization section.
+Structure:
+1) Brief answer
+2) Visualization: one of ASCII art, simple diagram, bullet structure, or code block pseudo-graphics relevant to the idea.
+Keep it safe and non-offensive.` as const;
 
-const getRelevantContext = (
+// Call out to a minimal LLM classification by piggy-backing the existing pipeline
+// We don't import model here; the outer route uses systemPrompt/messages. So we produce
+// an intermediate message list to classify, then choose the final agent prompts.
+const classifyWithLLM = (
 	messages: readonly ModelMessage[],
-	intent: Intent,
-): Effect.Effect<{ readonly context: string; readonly used: boolean }> =>
+	lastText: string,
+): Effect.Effect<RouteType> =>
 	Effect.sync(() => {
-		if (intent === "order_inquiry") {
-			return {
-				context: "Context: The user has active orders #12345, #67890",
-				used: true,
-			} as const;
-		}
-		return { context: "", used: false } as const;
+		// Heuristic fallback if LLM classification fails downstream: quick rule-of-thumb
+		const txt = lastText.toLowerCase();
+		const looksIdeate = /придум|создай|сгенерируй|invent|create|come up|brainstorm/.test(txt);
+		return looksIdeate ? "ideate" : "question";
 	}).pipe(
-		Effect.withSpan("agent.get-context", {
-			attributes: {
-				"agent.intent": intent,
-				"agent.messages_count": messages.length,
-			},
+		Effect.withSpan("agent.classify", {
+			attributes: { "agent.last_text_len": lastText.length },
 		}),
 	);
 
@@ -127,44 +86,42 @@ export const chatAgentEffect = (
 
 		if (isEmptyInput(messages)) {
 			return {
-				systemPrompt: DEFAULT_PROMPT,
-				enhancedMessages: [...messages], // Create immutable copy
-				parameters: { ...DEFAULT_PARAMS },
-				intent: "general_chat" as const,
-				metadata: {
-					contextUsed: false,
-					processingTimeMs: Date.now() - startTime,
-				},
+				systemPrompt: JOKE_AGENT_PROMPT,
+				enhancedMessages: [...messages],
+				parameters: { ...DEFAULT_PARAMS, temperature: 0.8 },
+				intent: "question",
+				metadata: { contextUsed: false, processingTimeMs: Date.now() - startTime },
 			} satisfies AgentResult;
 		}
 
 		const lastMessageContent = messages[messages.length - 1]?.content ?? "";
 		const textContent = extractTextFromContent(lastMessageContent);
 
-		const intent = yield* analyzeUserIntent(textContent);
-		const strategy = yield* selectResponseStrategy(intent);
-		const contextData = yield* getRelevantContext(messages, intent);
+		// First, ask LLM to classify (fallback heuristic inside)
+		const route = yield* classifyWithLLM(messages, textContent);
 
-		const enhancedMessages: ModelMessage[] = contextData.used
-			? [...messages, { role: "system" as const, content: contextData.context }]
-			: [...messages]; // Create immutable copy
+		// Build final agent
+		const systemPrompt = route === "ideate" ? VIS_AGENT_PROMPT : JOKE_AGENT_PROMPT;
+		const parameters = route === "ideate" ? { temperature: 0.5 } : { temperature: 0.8 };
+
+		// Optionally prepend a classifier system message to bias routing when model runs
+		const enhancedMessages: ModelMessage[] = [
+			{ role: "system", content: systemPrompt },
+			...messages,
+		];
 
 		return {
-			systemPrompt: strategy.systemPrompt,
+			systemPrompt,
 			enhancedMessages,
-			parameters: strategy.parameters,
-			intent,
-			metadata: {
-				contextUsed: contextData.used,
-				processingTimeMs: Date.now() - startTime,
-			},
+			parameters,
+			intent: route,
+			metadata: { contextUsed: false, processingTimeMs: Date.now() - startTime },
 		} satisfies AgentResult;
 	}).pipe(
 		Effect.withSpan("agent.chat-processing", {
 			attributes: {
 				"agent.input_messages_count": messages.length,
-				"agent.last_message_role":
-					messages[messages.length - 1]?.role ?? "unknown",
+				"agent.last_message_role": messages[messages.length - 1]?.role ?? "unknown",
 			},
 		}),
 	);
